@@ -115,7 +115,7 @@ def sendActionRequest(url, method, data, delay=0):
 
 
 def sendLightRequest(light, data):
-    print("LightRequest: " + light + ", data:" + json.dump(data, fp, sort_keys=True, indent=4, separators=(',', ': ')))
+    print("Send request to light  " + light)
 
 bridge_config = defaultdict(lambda:defaultdict(str))#Vividict()
 new_lights = {}
