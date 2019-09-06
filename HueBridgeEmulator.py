@@ -11,6 +11,7 @@ from uuid import getnode as get_mac
 from urlparse import urlparse, parse_qs
 
 mac = '%012x' % get_mac()
+listen_port = 80  # port real hardware uses is regular http port 80
 
 run_service = True
 
@@ -38,7 +39,7 @@ generate_sensors_state()
 
 def get_ip_address():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.connect(("8.8.8.8", 80))
+    s.connect(("8.8.8.8", listen_port))
     return s.getsockname()[0]
 
 bridge_config["config"]["ipaddress"] = get_ip_address()
@@ -56,7 +57,7 @@ def ssdp_search():
     multicast_group_c = SSDP_ADDR
     multicast_group_s = (SSDP_ADDR, SSDP_PORT)
     server_address = ('', SSDP_PORT)
-    Response_message = 'HTTP/1.1 200 OK\r\nHOST: 239.255.255.250:1900\r\nEXT:CACHE-CONTROL: max-age=100\r\nLOCATION: http://' + get_ip_address() + ':80/description.xml\r\nSERVER: Linux/3.14.0 UPnP/1.0 IpBridge/1.16.0\r\nhue-bridgeid: ' + mac.upper() + '\r\nST: urn:schemas-upnp-org:device:basic:1\r\nUSN: uuid:2f402f80-da50-11e1-9b23-' + mac
+    Response_message = 'HTTP/1.1 200 OK\r\nHOST: 239.255.255.250:1900\r\nEXT:\r\nCACHE-CONTROL: max-age=100\r\nLOCATION: http://' + get_ip_address() + ':' + str(listen_port) + '/description.xml\r\nSERVER: Linux/3.14.0 UPnP/1.0 IpBridge/1.16.0\r\nhue-bridgeid: ' + mac.upper() + '\r\nST: urn:schemas-upnp-org:device:basic:1\r\nUSN: uuid:2f402f80-da50-11e1-9b23-' + mac
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(server_address)
 
@@ -194,7 +195,7 @@ def description():
 <major>1</major>
 <minor>0</minor>
 </specVersion>
-<URLBase>http://""" + get_ip_address() + """:80/</URLBase>
+<URLBase>http://""" + get_ip_address() + """:""" + str(listen_port) + """/</URLBase>
 <device>
 <deviceType>urn:schemas-upnp-org:device:Basic:1</deviceType>
 <friendlyName>Philips hue</friendlyName>
@@ -442,9 +443,9 @@ class S(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps([{"success": "/" + url_pices[3] + "/" + url_pices[4] + " deleted."}]))
 
 def run(server_class=HTTPServer, handler_class=S):
-    server_address = ('', 80)
+    server_address = ('', listen_port)
     httpd = server_class(server_address, handler_class)
-    print 'Starting httpd...'
+    print('Starting httpd on %d...' % listen_port)
     httpd.serve_forever()
 
 if __name__ == "__main__":
