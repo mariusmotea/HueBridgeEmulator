@@ -5,6 +5,7 @@ from __future__ import print_function
 import logging
 import os
 import signal
+import sys
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 from time import strftime, sleep
 from datetime import datetime, timedelta
@@ -29,16 +30,27 @@ bridge_config = defaultdict(lambda:defaultdict(str))
 sensors_state = {}
 
 logger = logging.getLogger('hue')
+handler = logging.StreamHandler(sys.stdout)
+logger.addHandler(handler)
+
+handler.setLevel(logging.INFO)
 logger.setLevel(logging.INFO)
 
 #load config files
-def load_config():
+def get_config_from_file():
     try:
         with open('config.json', 'r') as fp:
-            bridge_config = json.load(fp)
+            result = json.load(fp)
             logger.info("config loaded")
+            return result
     except Exception:
         logger.exception("config file was not loaded")
+
+
+def load_config():
+    global bridge_config
+    bridge_config = get_config_from_file()
+
 
 def generate_sensors_state():
     for sensor in bridge_config["sensors"]:
