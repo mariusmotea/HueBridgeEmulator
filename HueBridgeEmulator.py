@@ -5,6 +5,8 @@ from __future__ import print_function
 import logging
 import os
 import signal
+import sys
+import time
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 from time import strftime, sleep
 from datetime import datetime, timedelta
@@ -29,16 +31,27 @@ bridge_config = defaultdict(lambda:defaultdict(str))
 sensors_state = {}
 
 logger = logging.getLogger('hue')
+handler = logging.StreamHandler(sys.stdout)
+logger.addHandler(handler)
+
+handler.setLevel(logging.INFO)
 logger.setLevel(logging.INFO)
 
 #load config files
-def load_config():
+def get_config_from_file():
     try:
         with open('config.json', 'r') as fp:
-            bridge_config = json.load(fp)
+            result = json.load(fp)
             logger.info("config loaded")
+            return result
     except Exception:
         logger.exception("config file was not loaded")
+
+
+def load_config():
+    global bridge_config
+    bridge_config = get_config_from_file()
+
 
 def generate_sensors_state():
     for sensor in bridge_config["sensors"]:
@@ -471,38 +484,79 @@ class S(BaseHTTPRequestHandler):
             del bridge_config[url_pices[3]][url_pices[4]]
             self.wfile.write(json.dumps([{"success": "/" + url_pices[3] + "/" + url_pices[4] + " deleted."}]))
 
-def run(server_class=HTTPServer, handler_class=S):
-    server_address = ('', listen_port)
-    httpd = server_class(server_address, handler_class)
-    print('Starting httpd on %d...' % listen_port)
-    httpd.serve_forever()
 
+class Application(object):
 
-def exit_handler(*args):
-    logger.error("Signal received. Stopping service!")
-    global run_service
-    run_service = False
+    def __init__(self):
+        self.httpd = None
+        """:type:BaseHTTPServer.HTTPServer | None"""
+        self.shutdown_req = False
+        self.running = True
 
-def reload_config_handler(*args):
-    logger.info("Reloading config")
-    load_config()
+    def shutdown_executor(self):
+        while self.running:
+            if self.shutdown_req:
+                time.sleep(1)
+                self.httpd.shutdown()
+
+    def run(self, server_class=HTTPServer, handler_class=S):
+        signal.signal(signal.SIGTERM, self.exit_handler)
+        signal.signal(signal.SIGINT, self.exit_handler)
+        try:
+            signal.signal(signal.SIGUSR1, self.reload_config_handler)
+        except Exception:
+            pass  # probably it is Windows
+        server_address = ('', listen_port)
+        self.httpd = server_class(server_address, handler_class)
+        print('Starting httpd on %d...' % listen_port)
+        self.start_shutdown_executor()
+        while run_service:
+            # single request (improper uri) can cause exception and then it results with server is shutting down
+            # we should start new server to continue handling requests
+            try:
+                self.httpd.serve_forever(poll_interval=0.5)
+            except Exception:
+                logger.exception("Exception during handling request")
+        self.running = False
+
+    def start_shutdown_executor(self):
+        t = Thread(target=self.shutdown_executor)
+        t.setDaemon(True)
+        t.start()
+
+    def exit_handler(self, *args):
+        logger.error("Signal received. Stopping service!")
+        global run_service
+        run_service = False
+        if self.httpd:
+            logger.info('Stopping server...')
+            # it is not possible to shutdown http server in interrupt handler as Event.wait inside shutdown()
+            # would stuck
+            self.shutdown_req = True
+
+    def reload_config_handler(self, *args):
+        logger.info("Reloading config")
+        load_config()
 
 
 if __name__ == "__main__":
     try:
+        app = Application()
         load_config()
-        signal.signal(signal.SIGTERM, exit_handler)
-        signal.signal(signal.SIGINT, exit_handler)
-        signal.signal(signal.SIGUSR1, reload_config_handler)
+        logger.info("Current config: \n%s", json.dumps(bridge_config, indent=2))
         if os.getenv('RUN_SSDP') != 'n':
-            Thread(target=ssdp_search).start()
+            t = Thread(target=ssdp_search)
+            t.setDaemon(True)
+            t.start()
         if os.getenv('RUN_RULES') != 'n':
-            Thread(target=scheduler_processor).start()
-        while run_service:
-            try:
-                run()
-            except Exception:
-                logger.exception("Error during processing request")
+            t = Thread(target=scheduler_processor)
+            t.setDaemon(True)
+            t.start()
+        try:
+            app.run()
+            logger.info('Http Server stopped.')
+        except Exception:
+            logger.exception("Error during processing request")
 
     except Exception:
         logger.exception("server stopped")
