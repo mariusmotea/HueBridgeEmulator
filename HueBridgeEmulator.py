@@ -534,6 +534,7 @@ if __name__ == "__main__":
     try:
         app = Application()
         load_config()
+        logger.info("Current config: %n%s", json.dumps(bridge_config, indent=2))
         if os.getenv('RUN_SSDP') != 'n':
             t = Thread(target=ssdp_search)
             t.setDaemon(True)
