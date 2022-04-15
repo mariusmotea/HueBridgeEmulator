@@ -115,6 +115,7 @@ def scheduler_processor():
 
 
 def process_rules():
+    global bridge_config
     for schedule in bridge_config["schedules"].keys():
         if bridge_config["schedules"][schedule]["status"] == "enabled":
             if bridge_config["schedules"][schedule]["localtime"].startswith("W"):
