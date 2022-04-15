@@ -510,9 +510,7 @@ if __name__ == "__main__":
             Thread(target=ssdp_search).start()
         if os.getenv('RUN_RULES') != 'n':
             Thread(target=scheduler_processor).start()
-        while run_service:
             try:
-                logger.info('Starting HTTP server...')
                 run()
             except Exception:
                 logger.exception("Error during processing request")
