@@ -502,12 +502,21 @@ class Application(object):
     def run(self, server_class=HTTPServer, handler_class=S):
         signal.signal(signal.SIGTERM, self.exit_handler)
         signal.signal(signal.SIGINT, self.exit_handler)
-        signal.signal(signal.SIGUSR1, self.reload_config_handler)
+        try:
+            signal.signal(signal.SIGUSR1, self.reload_config_handler)
+        except Exception:
+            pass  # probably it is Windows
         server_address = ('', listen_port)
         self.httpd = server_class(server_address, handler_class)
         print('Starting httpd on %d...' % listen_port)
         self.start_shutdown_executor()
-        self.httpd.serve_forever(poll_interval=0.5)
+        while run_service:
+            # single request (improper uri) can cause exception and then it results with server is shutting down
+            # we should start new server to continue handling requests
+            try:
+                self.httpd.serve_forever(poll_interval=0.5)
+            except Exception:
+                logger.exception("Exception during handling request")
         self.running = False
 
     def start_shutdown_executor(self):
