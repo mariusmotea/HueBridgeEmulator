@@ -500,6 +500,7 @@ if __name__ == "__main__":
             Thread(target=scheduler_processor).start()
         while run_service:
             try:
+                logger.info('Starting HTTP server...')
                 run()
             except Exception:
                 logger.exception("Error during processing request")
