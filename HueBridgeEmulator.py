@@ -1,4 +1,10 @@
 #!/usr/bin/python
+
+from __future__ import print_function
+
+import logging
+import os
+import signal
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 from time import strftime, sleep
 from datetime import datetime, timedelta
@@ -11,27 +17,34 @@ from uuid import getnode as get_mac
 from urlparse import urlparse, parse_qs
 
 mac = '%012x' % get_mac()
+
 listen_port = 80  # port real hardware uses is regular http port 80
+
+if os.getenv('HUE_PORT'):
+    listen_port = int(os.getenv('HUE_PORT'))
 
 run_service = True
 
 bridge_config = defaultdict(lambda:defaultdict(str))
 sensors_state = {}
 
-#load config files
-try:
-    with open('config.json', 'r') as fp:
-        bridge_config = json.load(fp)
-        print("config loaded")
-except Exception:
-    print("config file was not loaded")
+logger = logging.getLogger('hue')
+logger.setLevel(logging.INFO)
 
+#load config files
+def load_config():
+    try:
+        with open('config.json', 'r') as fp:
+            bridge_config = json.load(fp)
+            logger.info("config loaded")
+    except Exception:
+        logger.exception("config file was not loaded")
 
 def generate_sensors_state():
     for sensor in bridge_config["sensors"]:
         if sensor not in sensors_state and "state" in bridge_config["sensors"][sensor]:
             sensors_state[sensor] = {"state": {}}
-            for key in bridge_config["sensors"][sensor]["state"].iterkeys():
+            for key in bridge_config["sensors"][sensor]["state"].keys():
                 if key in ["lastupdated", "presence", "flag", "dark", "status"]:
                     sensors_state[sensor]["state"].update({key: "2017-01-01T00:00:00"})
 
@@ -75,35 +88,50 @@ def ssdp_search():
                           print("Sending M Search response")
                           sock.sendto(Response_message, address)
               sleep(1)
+    sock.close()
+
 
 def scheduler_processor():
     while run_service:
-        for schedule in bridge_config["schedules"].iterkeys():
-            if bridge_config["schedules"][schedule]["status"] == "enabled":
-                if bridge_config["schedules"][schedule]["localtime"].startswith("W"):
-                    pices = bridge_config["schedules"][schedule]["localtime"].split('/T')
-                    if int(pices[0][1:]) & (1 << 6 - datetime.today().weekday()):
-                        if pices[1] == datetime.now().strftime("%H:%M:%S"):
-                            print("execute schedule: " + schedule)
-                            sendRequest(bridge_config["schedules"][schedule]["command"]["address"], bridge_config["schedules"][schedule]["command"]["method"], json.dumps(bridge_config["schedules"][schedule]["command"]["body"]))
-                elif bridge_config["schedules"][schedule]["localtime"].startswith("PT"):
-                    if bridge_config["schedules"][schedule]["starttime"] == datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"):
-                        print("execute timmer: " + schedule)
-                        sendRequest(bridge_config["schedules"][schedule]["command"]["address"], bridge_config["schedules"][schedule]["command"]["method"], json.dumps(bridge_config["schedules"][schedule]["command"]["body"]))
-                        bridge_config["schedules"][schedule]["status"] = "disabled"
-                else:
-                    if bridge_config["schedules"][schedule]["localtime"] == datetime.now().strftime("%Y-%m-%dT%H:%M:%S"):
-                        print("execute schedule: " + schedule)
-                        sendRequest(bridge_config["schedules"][schedule]["command"]["address"], bridge_config["schedules"][schedule]["command"]["method"], json.dumps(bridge_config["schedules"][schedule]["command"]["body"]))
-        if (datetime.now().strftime("%M:%S") == "00:00"): #auto save configuration every hour
-            save_config()
+        try:
+            process_rules()
+        except Exception:
+            logger.exception("Error during processing rules.")
         rules_processor(True)
         sleep(1)
 
 
+def process_rules():
+    for schedule in bridge_config["schedules"].keys():
+        if bridge_config["schedules"][schedule]["status"] == "enabled":
+            if bridge_config["schedules"][schedule]["localtime"].startswith("W"):
+                pices = bridge_config["schedules"][schedule]["localtime"].split('/T')
+                if int(pices[0][1:]) & (1 << 6 - datetime.today().weekday()):
+                    if pices[1] == datetime.now().strftime("%H:%M:%S"):
+                        print("execute schedule: " + schedule)
+                        sendRequest(bridge_config["schedules"][schedule]["command"]["address"],
+                                    bridge_config["schedules"][schedule]["command"]["method"],
+                                    json.dumps(bridge_config["schedules"][schedule]["command"]["body"]))
+            elif bridge_config["schedules"][schedule]["localtime"].startswith("PT"):
+                if bridge_config["schedules"][schedule]["starttime"] == datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"):
+                    print("execute timmer: " + schedule)
+                    sendRequest(bridge_config["schedules"][schedule]["command"]["address"],
+                                bridge_config["schedules"][schedule]["command"]["method"],
+                                json.dumps(bridge_config["schedules"][schedule]["command"]["body"]))
+                    bridge_config["schedules"][schedule]["status"] = "disabled"
+            else:
+                if bridge_config["schedules"][schedule]["localtime"] == datetime.now().strftime("%Y-%m-%dT%H:%M:%S"):
+                    print("execute schedule: " + schedule)
+                    sendRequest(bridge_config["schedules"][schedule]["command"]["address"],
+                                bridge_config["schedules"][schedule]["command"]["method"],
+                                json.dumps(bridge_config["schedules"][schedule]["command"]["body"]))
+    if (datetime.now().strftime("%M:%S") == "00:00"):  # auto save configuration every hour
+        save_config()
+
+
 def rules_processor(scheduler=False):
     bridge_config["config"]["localtime"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S") #required for operator dx to address /config/localtime
-    for rule in bridge_config["rules"].iterkeys():
+    for rule in bridge_config["rules"].keys():
         if bridge_config["rules"][rule]["status"] == "enabled":
             execute = True
             for condition in bridge_config["rules"][rule]["conditions"]:
@@ -166,10 +194,11 @@ def sendRequest(url, method, data, time_out=3):
 def sendLightRequest(light, data):
     print("Update light " + light + " with " + json.dumps(data))
 
+
 def update_group_stats(light): #set group stats based on lights status in that group
     for group in bridge_config["groups"]:
         if light in bridge_config["groups"][group]["lights"]:
-            for key, value in bridge_config["lights"][light]["state"].iteritems():
+            for key, value in bridge_config["lights"][light]["state"].items():
                 if key not in ["on", "reachable"]:
                     bridge_config["groups"][group]["action"][key] = value
             any_on = False
@@ -261,7 +290,7 @@ class S(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._set_headers()
-        print "in post method"
+        print("in post method")
         self.data_string = self.rfile.read(int(self.headers['Content-Length']))
         post_dictionary = json.loads(self.data_string)
         url_pices = self.path.split('/')
@@ -318,7 +347,7 @@ class S(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         self._set_headers()
-        print "in PUT method"
+        print("in PUT method")
         self.data_string = self.rfile.read(int(self.headers['Content-Length']))
         put_dictionary = json.loads(self.data_string)
         url_pices = self.path.split('/')
@@ -355,7 +384,7 @@ class S(BaseHTTPRequestHandler):
                                 bridge_config["scenes"][url_pices[4]]["lightstates"][light]["sat"] = bridge_config["lights"][light]["state"]["sat"]
 
                 if url_pices[3] == "sensors":
-                    for key, value in put_dictionary.iteritems():
+                    for key, value in put_dictionary.items():
                         bridge_config[url_pices[3]][url_pices[4]][key].update(value)
                 else:
                     bridge_config[url_pices[3]][url_pices[4]].update(put_dictionary)
@@ -386,10 +415,10 @@ class S(BaseHTTPRequestHandler):
                             bridge_config["lights"][light]["state"].update(put_dictionary)
                             Thread(target=sendLightRequest, args=[light, put_dictionary]).start()
                     elif url_pices[4] == "0":
-                        for light in bridge_config["lights"].iterkeys():
+                        for light in bridge_config["lights"].keys():
                             bridge_config["lights"][light]["state"].update(put_dictionary)
                             Thread(target=sendLightRequest, args=[light, put_dictionary]).start()
-                        for group in bridge_config["groups"].iterkeys():
+                        for group in bridge_config["groups"].keys():
                             bridge_config["groups"][group][url_pices[5]].update(put_dictionary)
                             if "on" in put_dictionary:
                                 bridge_config["groups"][group]["state"]["any_on"] = put_dictionary["on"]
@@ -403,7 +432,7 @@ class S(BaseHTTPRequestHandler):
                                 Thread(target=sendLightRequest, args=[light, put_dictionary]).start()
                 elif url_pices[3] == "lights": #state is applied to a light
                     Thread(target=sendLightRequest, args=[url_pices[4], put_dictionary]).start()
-                    for key in put_dictionary.iterkeys():
+                    for key in put_dictionary.keys():
                         if key in ["ct", "xy"]: #colormode must be set by bridge
                             bridge_config["lights"][url_pices[4]]["state"]["colormode"] = key
                         elif key in ["hue", "sat"]:
@@ -415,7 +444,7 @@ class S(BaseHTTPRequestHandler):
                     except KeyError:
                         bridge_config[url_pices[3]][url_pices[4]][url_pices[5]] = put_dictionary
                 if url_pices[3] == "sensors" and url_pices[5] == "state":
-                    for key in put_dictionary.iterkeys():
+                    for key in put_dictionary.keys():
                         sensors_state[url_pices[4]]["state"].update({key: datetime.now().strftime("%Y-%m-%dT%H:%M:%S")})
                     if "flag" in put_dictionary: #if a scheduler change te flag of a logical sensor then process the rules.
                         rules_processor()
@@ -428,7 +457,7 @@ class S(BaseHTTPRequestHandler):
                 bridge_config[url_pices[3]][url_pices[4]][url_pices[5]][url_pices[6]] = put_dictionary
                 response_location = "/" + url_pices[3] + "/" + url_pices[4] + "/" + url_pices[5] + "/" + url_pices[6] + "/"
             response_dictionary = []
-            for key, value in put_dictionary.iteritems():
+            for key, value in put_dictionary.items():
                 response_dictionary.append({"success":{response_location + key: value}})
             self.wfile.write(json.dumps(response_dictionary,sort_keys=True, indent=4, separators=(',', ': ')))
             print(json.dumps(response_dictionary, sort_keys=True, indent=4, separators=(',', ': ')))
@@ -448,14 +477,36 @@ def run(server_class=HTTPServer, handler_class=S):
     print('Starting httpd on %d...' % listen_port)
     httpd.serve_forever()
 
+
+def exit_handler(*args):
+    logger.error("Signal received. Stopping service!")
+    global run_service
+    run_service = False
+
+def reload_config_handler(*args):
+    logger.info("Reloading config")
+    load_config()
+
+
 if __name__ == "__main__":
     try:
-        Thread(target=ssdp_search).start()
-        Thread(target=scheduler_processor).start()
-        run()
-    except:
-        print("server stopped")
+        load_config()
+        signal.signal(signal.SIGTERM, exit_handler)
+        signal.signal(signal.SIGINT, exit_handler)
+        signal.signal(signal.SIGUSR1, reload_config_handler)
+        if os.getenv('RUN_SSDP') != 'n':
+            Thread(target=ssdp_search).start()
+        if os.getenv('RUN_RULES') != 'n':
+            Thread(target=scheduler_processor).start()
+        while run_service:
+            try:
+                run()
+            except Exception:
+                logger.exception("Error during processing request")
+
+    except Exception:
+        logger.exception("server stopped")
     finally:
         run_service = False
         save_config()
-        print 'config saved'
+        print('config saved')
