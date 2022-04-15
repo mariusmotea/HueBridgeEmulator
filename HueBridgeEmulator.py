@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 from time import strftime, sleep
 from datetime import datetime, timedelta
@@ -483,43 +484,69 @@ class S(BaseHTTPRequestHandler):
             del bridge_config[url_pices[3]][url_pices[4]]
             self.wfile.write(json.dumps([{"success": "/" + url_pices[3] + "/" + url_pices[4] + " deleted."}]))
 
-httpd = None
-""":type:BaseHTTPServer.HTTPServer | None"""
 
-def run(server_class=HTTPServer, handler_class=S):
-    server_address = ('', listen_port)
-    global httpd
-    httpd = server_class(server_address, handler_class)
-    print('Starting httpd on %d...' % listen_port)
-    httpd.serve_forever()
+class Application(object):
 
+    def __init__(self):
+        self.httpd = None
+        """:type:BaseHTTPServer.HTTPServer | None"""
+        self.shutdown_req = False
+        self.running = True
 
-def exit_handler(*args):
-    logger.error("Signal received. Stopping service!")
-    global run_service
-    if httpd:
-        httpd.shutdown()
-    run_service = False
+    def shutdown_executor(self):
+        while self.running:
+            if self.shutdown_req:
+                time.sleep(1)
+                self.httpd.shutdown()
 
-def reload_config_handler(*args):
-    logger.info("Reloading config")
-    load_config()
+    def run(self, server_class=HTTPServer, handler_class=S):
+        signal.signal(signal.SIGTERM, self.exit_handler)
+        signal.signal(signal.SIGINT, self.exit_handler)
+        signal.signal(signal.SIGUSR1, self.reload_config_handler)
+        server_address = ('', listen_port)
+        self.httpd = server_class(server_address, handler_class)
+        print('Starting httpd on %d...' % listen_port)
+        self.start_shutdown_executor()
+        self.httpd.serve_forever(poll_interval=0.5)
+        self.running = False
+
+    def start_shutdown_executor(self):
+        t = Thread(target=self.shutdown_executor)
+        t.setDaemon(True)
+        t.start()
+
+    def exit_handler(self, *args):
+        logger.error("Signal received. Stopping service!")
+        global run_service
+        run_service = False
+        if self.httpd:
+            logger.info('Stopping server...')
+            # it is not possible to shutdown http server in interrupt handler as Event.wait inside shutdown()
+            # would stuck
+            self.shutdown_req = True
+
+    def reload_config_handler(self, *args):
+        logger.info("Reloading config")
+        load_config()
 
 
 if __name__ == "__main__":
     try:
+        app = Application()
         load_config()
-        signal.signal(signal.SIGTERM, exit_handler)
-        signal.signal(signal.SIGINT, exit_handler)
-        signal.signal(signal.SIGUSR1, reload_config_handler)
         if os.getenv('RUN_SSDP') != 'n':
-            Thread(target=ssdp_search).start()
+            t = Thread(target=ssdp_search)
+            t.setDaemon(True)
+            t.start()
         if os.getenv('RUN_RULES') != 'n':
-            Thread(target=scheduler_processor).start()
-            try:
-                run()
-            except Exception:
-                logger.exception("Error during processing request")
+            t = Thread(target=scheduler_processor)
+            t.setDaemon(True)
+            t.start()
+        try:
+            app.run()
+            logger.info('Http Server stopped.')
+        except Exception:
+            logger.exception("Error during processing request")
 
     except Exception:
         logger.exception("server stopped")
