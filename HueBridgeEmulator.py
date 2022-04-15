@@ -483,8 +483,12 @@ class S(BaseHTTPRequestHandler):
             del bridge_config[url_pices[3]][url_pices[4]]
             self.wfile.write(json.dumps([{"success": "/" + url_pices[3] + "/" + url_pices[4] + " deleted."}]))
 
+httpd = None
+""":type:BaseHTTPServer.HTTPServer | None"""
+
 def run(server_class=HTTPServer, handler_class=S):
     server_address = ('', listen_port)
+    global httpd
     httpd = server_class(server_address, handler_class)
     print('Starting httpd on %d...' % listen_port)
     httpd.serve_forever()
@@ -493,6 +497,8 @@ def run(server_class=HTTPServer, handler_class=S):
 def exit_handler(*args):
     logger.error("Signal received. Stopping service!")
     global run_service
+    if httpd:
+        httpd.shutdown()
     run_service = False
 
 def reload_config_handler(*args):
